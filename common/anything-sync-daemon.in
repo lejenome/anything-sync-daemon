@@ -38,7 +38,7 @@ fi
 
 # if asd is active, source the snapshot of /etc/asd.conf preferentially
 if [[ -f "${DAEMON_FILE}.conf" ]]; then
-	unset WHATTOSYNC USE_OVERLAYFS USE_BACKUPS VOLATILE
+	unset WHATTOSYNC USE_OVERLAYFS USE_BACKUPS VOLATILE EXCLUDE_FILES
 	ASDCONF="${DAEMON_FILE}.conf"
 	. "$ASDCONF"
 fi
@@ -66,6 +66,11 @@ case "${USE_BACKUPS,,}" in
 		CRRE=0
 		;;
 esac
+
+# append --exclude= to each PATTERN
+for ((i=0; i<${#EXCLUDE_FILES[@]}; i++)); do
+	EXCL[$i]="--exclude=${EXCLUDE_FILES[$i]}"
+done
 
 # determine is we are using overlayfs (v22 and below) or overlay (v23 and above)
 # overlay FS v23 and later requires both an upper and a work directory, both on
@@ -154,6 +159,15 @@ config_check() {
 			exit 1
 		fi
 	done
+	for PATTERN in "${EXCLUDE_FILES[@]}"; do
+		if [[ "${PATTERN: -1}" = "/" || "${PATTERN[1]}" = "/" ]]; then
+			echo -e "${BLD}Trailing slash in your EXCLUDE_FILES array detected:"${NRM}
+			echo -e " ${BLD}${RED}$PATTERN"${NRM}
+			echo -e "${BLD}Edit ${BLU}$ASDCONF${NRM}${BLD} removing the trailing slash and try again."${NRM}
+			exit 1
+		fi
+	done
+
 }
 
 root_check() {
@@ -311,9 +325,10 @@ do_sync() {
 			# sync the tmpfs targets to the disc
 			if [[ -e "$TMP"/.flagged ]]; then
 				if [[ $OLFS -eq 1 ]]; then
-					rsync -aogX --delete-after --inplace --no-whole-file --exclude .flagged "$DIR/" "$BACK_OVFS/"
+					rsync -aogX --delete-after --inplace --no-whole-file --exclude .flagged "${EXCL[@]}" "$DIR/" "$BACK_OVFS/"
+
 				else
-					rsync -aogX --delete-after --inplace --no-whole-file --exclude .flagged "$DIR/" "$BACKUP/"
+					rsync -aogX --delete-after --inplace --no-whole-file --exclude .flagged "${EXCL[@]}" "$DIR/" "$BACKUP/"
 				fi
 			else
 				# initial sync
@@ -324,7 +339,7 @@ do_sync() {
 						mount -t overlayfs overlaid -olowerdir="$BACKUP",upperdir="$UPPER" "$TMP"
 					fi
 				else
-					rsync -aogX --inplace --no-whole-file "$BACKUP/" "$TMP/"
+					rsync -aogX --inplace --no-whole-file "${EXCL[@]}" "$BACKUP/" "$TMP/"
 				fi
 				touch "$DIR"/.flagged
 			fi
@@ -356,7 +371,7 @@ do_unsync() {
 			# restore original dirtree
 			[[ -d "$BACKUP" ]] && mv --no-target-directory "$BACKUP" "$DIR"
 			if [[ $OLFS -eq 1 ]] && mountpoint -q "$TMP"; then
-				rsync -aogX --delete-after --inplace --no-whole-file --exclude .flagged "$BACK_OVFS/" "$DIR/"
+				rsync -aogX --delete-after --inplace --no-whole-file --exclude .flagged "${EXCL[@]}" "$BACK_OVFS/" "$DIR/"
 				umount -l "$TMP"
 				rm -rf "$VOLATILE/asd-$USER" "$VOLATILE/asd-$USER-rw" "$VOLATILE/.asd-$USER" &>/dev/null
 			else
@@ -401,7 +416,7 @@ parse() {
 		WORK="$VOLATILE/.asd-$USER$DIR"
 
 		# sync target dir size
-		psize=$(du -Dh --max-depth=0 "$DIR" 2>/dev/null | awk '{ print $1 }')
+		psize=$(du -Dh --max-depth=0 "${EXCL[@]}" "$DIR" 2>/dev/null | awk '{ print $1 }')
 		if [[ -d "$DIR" ]]; then
 			# first count up any crashrecovery dirs
 			ls "$BACKUP"-crashrecovery* &>/dev/null
@@ -417,7 +432,7 @@ parse() {
 			echo -en " ${BLD}dir size:"
 			echo -e "$(tput cr)$(tput cuf 20) $psize"${NRM}
 			if [[ $OLFS -eq 1 ]]; then
-				rwsize=$(du -Dh --max-depth=0 "$UPPER" 2>/dev/null | awk '{ print $1 }')
+				rwsize=$(du -Dh --max-depth=0 "${EXCL[@]}" "$UPPER" 2>/dev/null | awk '{ print $1 }')
 				echo -en " ${BLD}overlayfs size:"
 				echo -e "$(tput cr)$(tput cuf 20) $rwsize"${NRM}
 			fi
@@ -427,7 +442,7 @@ parse() {
 			else
 				echo -e "$(tput cr)$(tput cuf 20) ${RED}${#CRASHArr[@]}${NRM}${BLD} <- delete with the c option"${NRM}
 				for backup in "${CRASHArr[@]}"; do
-					psize=$(du -Dh --max-depth=0 "$backup" 2>/dev/null | awk '{ print $1 }')
+					psize=$(du -Dh --max-depth=0 "${EXCL[@]}" "$backup" 2>/dev/null | awk '{ print $1 }')
 					echo -en " ${BLD} dir path/size:"
 					echo -e "$(tput cr)$(tput cuf 20) ${BLU}$backup ${NRM}${BLD}($psize)"${NRM} 
 				done
